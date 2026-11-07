@@ -1,0 +1,283 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Attendance - Live Camera</title>
+
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: Arial, sans-serif;
+      background: #f1f5f9;
+      color: #1e293b;
+    }
+
+    .container {
+      max-width: 430px;
+      margin: 25px auto;
+      background: white;
+      padding: 22px;
+      border-radius: 18px;
+      box-shadow: 0 5px 25px rgba(0,0,0,.08);
+      text-align: center;
+    }
+
+    h2 { margin: 5px 0 8px; }
+
+    .subtitle {
+      color: #64748b;
+      font-size: 14px;
+      margin-bottom: 20px;
+    }
+
+    video, canvas, #preview {
+      width: 100%;
+      border-radius: 12px;
+      background: #0f172a;
+      margin-top: 12px;
+    }
+
+    video {
+      aspect-ratio: 3 / 4;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+
+    canvas { display: none; }
+
+    #preview {
+      display: none;
+      object-fit: contain;
+    }
+
+    button {
+      width: 100%;
+      padding: 14px;
+      margin-top: 14px;
+      border: none;
+      border-radius: 9px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+
+    #startBtn { background: #2563eb; color: white; }
+    #captureBtn { background: #16a34a; color: white; }
+    #retakeBtn { background: #475569; color: white; }
+
+    #status {
+      margin-top: 15px;
+      padding: 12px;
+      border-radius: 8px;
+      background: #eff6ff;
+      color: #1e40af;
+      font-size: 14px;
+    }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+
+<body>
+<div class="container">
+
+  <h2>Live Photo Capture</h2>
+  <p class="subtitle">Employee Attendance System</p>
+
+  <p id="instructions">
+    Click Start Camera and allow camera permission.
+  </p>
+
+  <video id="camera" autoplay playsinline muted></video>
+  <canvas id="photoCanvas"></canvas>
+  <img id="preview" alt="Captured live photograph">
+
+  <button id="startBtn" onclick="startCamera()">
+    Start Front Camera
+  </button>
+
+  <button id="captureBtn" class="hidden" onclick="capturePhoto()">
+    Capture Live Photo
+  </button>
+
+  <button id="retakeBtn" class="hidden" onclick="retakePhoto()">
+    Retake Photo
+  </button>
+
+  <div id="status">
+    Waiting for camera permission.
+  </div>
+
+</div>
+
+<script>
+  let cameraStream = null;
+  let parentOrigin = null;
+  let captured = false;
+
+  const video = document.getElementById("camera");
+  const canvas = document.getElementById("photoCanvas");
+  const preview = document.getElementById("preview");
+  const startBtn = document.getElementById("startBtn");
+  const captureBtn = document.getElementById("captureBtn");
+  const retakeBtn = document.getElementById("retakeBtn");
+  const statusBox = document.getElementById("status");
+
+  function setStatus(message) {
+    statusBox.textContent = message;
+  }
+
+  // Receive initialization message from attendance website.
+  window.addEventListener("message", function(event) {
+    if (!window.opener || event.source !== window.opener) return;
+
+    if (event.data && event.data.type === "CAMERA_INIT") {
+      parentOrigin = event.origin;
+      setStatus("Connected to attendance website. Start the camera.");
+    }
+  });
+
+  // Tell the opening attendance page that this camera page is ready.
+  if (window.opener) {
+    window.opener.postMessage({
+      type: "CAMERA_READY"
+    }, "*");
+  } else {
+    setStatus("Please open this camera page from the attendance website.");
+    startBtn.disabled = true;
+  }
+
+  async function startCamera() {
+    try {
+      if (!window.isSecureContext ||
+          !navigator.mediaDevices ||
+          !navigator.mediaDevices.getUserMedia) {
+        throw new Error("Camera requires a secure HTTPS page and a supported browser.");
+      }
+
+      if (!parentOrigin || !window.opener) {
+        throw new Error("Attendance website connection is missing. Close this page and open the camera again from attendance.");
+      }
+
+      startBtn.disabled = true;
+      setStatus("Requesting camera permission...");
+
+      cameraStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "user" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false
+      });
+
+      video.srcObject = cameraStream;
+      await video.play();
+
+      video.classList.remove("hidden");
+      preview.style.display = "none";
+
+      startBtn.classList.add("hidden");
+      captureBtn.classList.remove("hidden");
+      retakeBtn.classList.add("hidden");
+
+      captured = false;
+      setStatus("Camera ready. Look at the camera and capture your photo.");
+
+    } catch (error) {
+      startBtn.disabled = false;
+
+      let message = error.message;
+
+      if (error.name === "NotAllowedError" ||
+          error.name === "PermissionDeniedError") {
+        message = "Camera permission denied. Allow camera access in Chrome site settings.";
+      } else if (error.name === "NotFoundError") {
+        message = "No camera was found on this device.";
+      } else if (error.name === "NotReadableError") {
+        message = "Camera is being used by another application. Close other camera apps and retry.";
+      }
+
+      setStatus("Camera error: " + message);
+    }
+  }
+
+  function stopCamera() {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(track => track.stop());
+      cameraStream = null;
+    }
+    video.srcObject = null;
+  }
+
+  function capturePhoto() {
+    if (!cameraStream || !video.videoWidth) {
+      setStatus("Camera is not ready. Please try again.");
+      return;
+    }
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    const context = canvas.getContext("2d");
+
+    // Mirror the front-camera photo.
+    context.translate(canvas.width, 0);
+    context.scale(-1, 1);
+    context.drawImage(video, 0, 0);
+
+    const photoData = canvas.toDataURL("image/jpeg", 0.75);
+
+    if (photoData.length > 7 * 1024 * 1024) {
+      setStatus("Photo is too large. Please retake the photo.");
+      return;
+    }
+
+    if (!parentOrigin || !window.opener) {
+      setStatus("Attendance website connection was lost.");
+      return;
+    }
+
+    // Send captured photo to the original attendance page.
+    window.opener.postMessage({
+      type: "ATTENDANCE_PHOTO",
+      dataUrl: photoData
+    }, parentOrigin);
+
+    preview.src = photoData;
+    preview.style.display = "block";
+    video.classList.add("hidden");
+
+    stopCamera();
+
+    captured = true;
+    captureBtn.classList.add("hidden");
+    retakeBtn.classList.remove("hidden");
+
+    setStatus("Photo sent to attendance website successfully. You can return to the attendance tab.");
+  }
+
+  function retakePhoto() {
+    preview.style.display = "none";
+    retakeBtn.classList.add("hidden");
+    startBtn.classList.remove("hidden");
+    startBtn.disabled = false;
+
+    setStatus("Ready to capture another photo.");
+  }
+
+  window.addEventListener("pagehide", stopCamera);
+</script>
+
+</body>
+</html>
